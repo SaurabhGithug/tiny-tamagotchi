@@ -6,7 +6,7 @@ Personal Touches add character and "soul" to the Tiny Tamagotchi through easter 
 ## User Flow
 - **Interaction Reaction**: Clicking on the pet's sprite triggers a random "poke" reaction.
 - **Night Mode**: The UI background automatically darkens if the current local time is between 10 PM and 6 AM.
-- **Easter Egg**: Naming the pet a specific "Dev Name" (e.g., "Gemini" or "Antigravity") unlocks a unique accessory or color.
+- **Easter Egg**: Naming the pet a specific "Dev Name" (e.g., "DeepLearning" or "Antigravity") unlocks a unique accessory or animation effect.
 - **Idle Behavior**: If the user doesn't interact for 30 seconds, the pet performs a random idle animation (e.g., spinning or waving).
 
 ## Success Criteria

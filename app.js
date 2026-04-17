@@ -2,6 +2,7 @@
 
 const CONFIG = {
     TICKS_FOR_EVOLUTION: 60,
+    HEALTHY_TICKS_THRESHOLD: 40,
     TICK_INTERVAL_MS: 5000,
     SICK_THRESHOLD: 20,
     STAT_DECAY: {
@@ -13,6 +14,64 @@ const CONFIG = {
     IDLE_TIMEOUT_MS: 30000
 };
 
+// Pure Logic Class for Testability
+class TamagotchiLogic {
+    static applyDecay(state, ticks = 1) {
+        const multiplier = state.status === 'Sick' ? 1.5 : 1;
+        
+        state.stats.hunger = Math.min(100, Math.max(0, state.stats.hunger + (CONFIG.STAT_DECAY.hunger * ticks * multiplier)));
+        state.stats.happiness = Math.min(100, Math.max(0, state.stats.happiness + (CONFIG.STAT_DECAY.happiness * ticks * multiplier)));
+        state.stats.energy = Math.min(100, Math.max(0, state.stats.energy + (CONFIG.STAT_DECAY.energy * ticks * multiplier)));
+        
+        state.totalTicks += ticks;
+        if (state.status !== 'Sick') {
+            state.healthyTicks += ticks;
+        }
+        
+        return this.updateDerivedState(state);
+    }
+
+    static updateDerivedState(state) {
+        // Sickness check (Edge Case: Evolution prevents Sickness transition)
+        const isLow = state.stats.hunger <= CONFIG.SICK_THRESHOLD || 
+                      state.stats.happiness <= CONFIG.SICK_THRESHOLD || 
+                      state.stats.energy <= CONFIG.SICK_THRESHOLD;
+        
+        if (state.status !== 'Evolved') {
+            if (isLow) {
+                state.status = 'Sick';
+            } else {
+                state.status = 'Normal';
+            }
+        }
+
+        // Evolution check (Explicit thresholds)
+        if (state.status !== 'Evolved' && 
+            state.totalTicks >= CONFIG.TICKS_FOR_EVOLUTION && 
+            state.healthyTicks >= CONFIG.HEALTHY_TICKS_THRESHOLD) {
+            state.status = 'Evolved';
+            state.isEvolved = true;
+            return true; // Just evolved
+        }
+        return false;
+    }
+
+    static performAction(state, type) {
+        if (type === 'feed') {
+            state.stats.hunger = Math.min(100, state.stats.hunger + 20);
+            state.stats.happiness = Math.max(0, state.stats.happiness - 2);
+        } else if (type === 'play') {
+            state.stats.happiness = Math.min(100, state.stats.happiness + 25);
+            state.stats.energy = Math.max(0, state.stats.energy - 10);
+        } else if (type === 'rest') {
+            state.stats.energy = Math.min(100, state.stats.energy + 40);
+            state.stats.hunger = Math.max(0, state.stats.hunger - 10);
+        }
+        this.updateDerivedState(state);
+    }
+}
+
+// UI & Storage Layer
 class TamagotchiApp {
     constructor() {
         this.container = document.getElementById('app-container');
@@ -28,56 +87,23 @@ class TamagotchiApp {
         const saved = localStorage.getItem('tamagotchi_state');
         if (saved) {
             const state = JSON.parse(saved);
-            // Offline decay
             const now = Date.now();
-            const elapsedMs = now - state.lastTick;
+            const elapsedMs = now - (state.lastTick || now);
             const elapsedTicks = Math.floor(elapsedMs / CONFIG.TICK_INTERVAL_MS);
             
             if (elapsedTicks > 0) {
-                this.applyDecay(state, elapsedTicks);
+                // Cap offline decay to 100 ticks to avoid total annihilation
+                TamagotchiLogic.applyDecay(state, Math.min(elapsedTicks, 100));
                 state.lastTick = now;
             }
             return state;
         }
-        return null; // No pet yet
+        return null;
     }
 
     saveState() {
         this.gameState.lastTick = Date.now();
         localStorage.setItem('tamagotchi_state', JSON.stringify(this.gameState));
-    }
-
-    applyDecay(state, ticks = 1) {
-        const multiplier = state.status === 'Sick' ? 1.5 : 1;
-        state.stats.hunger = Math.max(0, state.stats.hunger + (CONFIG.STAT_DECAY.hunger * ticks * multiplier));
-        state.stats.happiness = Math.max(0, state.stats.happiness + (CONFIG.STAT_DECAY.happiness * ticks * multiplier));
-        state.stats.energy = Math.max(0, state.stats.energy + (CONFIG.STAT_DECAY.energy * ticks * multiplier));
-        
-        state.totalTicks += ticks;
-        if (state.status !== 'Sick') {
-            state.healthyTicks += ticks;
-        }
-        
-        this.updateDerivedState(state);
-    }
-
-    updateDerivedState(state) {
-        // Sickness check
-        const isLow = state.stats.hunger <= CONFIG.SICK_THRESHOLD || 
-                      state.stats.happiness <= CONFIG.SICK_THRESHOLD || 
-                      state.stats.energy <= CONFIG.SICK_THRESHOLD;
-        
-        if (isLow && state.status !== 'Evolved') {
-            state.status = 'Sick';
-        } else if (!isLow && state.status === 'Sick') {
-            state.status = 'Normal';
-        }
-
-        // Evolution check
-        if (state.status !== 'Evolved' && state.totalTicks >= CONFIG.TICKS_FOR_EVOLUTION && state.healthyTicks >= 40) {
-            state.status = 'Evolved';
-            this.showFeedback("EVOLVED! ✨");
-        }
     }
 
     init() {
@@ -121,6 +147,7 @@ class TamagotchiApp {
             name: name,
             stats: { hunger: 80, happiness: 80, energy: 100 },
             status: 'Normal',
+            isEvolved: false,
             totalTicks: 0,
             healthyTicks: 0,
             lastTick: Date.now()
@@ -132,7 +159,8 @@ class TamagotchiApp {
     startApp() {
         this.renderDashboard();
         this.tickInterval = setInterval(() => {
-            this.applyDecay(this.gameState);
+            const evolved = TamagotchiLogic.applyDecay(this.gameState);
+            if (evolved) this.showFeedback("EVOLVED! ✨");
             this.saveState();
             this.updateUI();
         }, CONFIG.TICK_INTERVAL_MS);
@@ -143,7 +171,7 @@ class TamagotchiApp {
 
     renderDashboard() {
         this.container.innerHTML = `
-            <div class="screen active">
+            <div class="screen active" id="game-screen">
                 <div class="pet-status" id="status-label">${this.gameState.status}</div>
                 <h1 class="pet-name">${this.gameState.name}</h1>
                 
@@ -177,7 +205,6 @@ class TamagotchiApp {
 
         this.setupActionListeners();
         this.updateUI();
-
         document.getElementById('pet-target').onclick = () => this.pokePet();
     }
 
@@ -204,76 +231,65 @@ class TamagotchiApp {
     handleAction(type) {
         if (this.cooldownActive) return;
 
-        // Incapacitation check
-        if (this.isStatDepleted()) {
-            if (type === 'feed' && this.gameState.stats.hunger > 0) return;
-            if (type === 'rest' && this.gameState.stats.energy > 0) return;
-        }
+        // Incapacitation check (Recovery Path)
+        const hunger0 = this.gameState.stats.hunger === 0;
+        const energy0 = this.gameState.stats.energy === 0;
+        if (hunger0 && type !== 'feed') return;
+        if (energy0 && type !== 'rest') return;
 
-        const stats = this.gameState.stats;
+        TamagotchiLogic.performAction(this.gameState, type);
+        
         let animation = 'animate-bounce';
-
-        if (type === 'feed') {
-            stats.hunger = Math.min(100, stats.hunger + 20);
-            stats.happiness = Math.max(0, stats.happiness - 2);
-            this.showFeedback("Yum!");
-        } else if (type === 'play') {
-            stats.happiness = Math.min(100, stats.happiness + 25);
-            stats.energy = Math.max(0, stats.energy - 10);
-            this.showFeedback("Wheee!");
-        } else if (type === 'rest') {
-            stats.energy = Math.min(100, stats.energy + 40);
-            stats.hunger = Math.max(0, stats.hunger - 10);
-            animation = 'animate-float';
+        if (type === 'feed') this.showFeedback("Yum!");
+        if (type === 'play') this.showFeedback("Wheee!");
+        if (type === 'rest') {
             this.showFeedback("Zzz...");
+            animation = 'animate-float';
         }
 
         this.triggerAnimation(animation);
         this.activateCooldown();
-        this.updateDerivedState(this.gameState);
         this.saveState();
         this.updateUI();
-    }
-
-    isStatDepleted() {
-        return this.gameState.stats.hunger === 0 || this.gameState.stats.energy === 0;
     }
 
     triggerAnimation(className) {
         const sprite = document.getElementById('pet-sprite');
         sprite.classList.add(className);
-        setTimeout(() => sprite.classList.remove(className), 1000);
+        setTimeout(() => sprite.classList.remove(className), className === 'animate-float' ? 3000 : 1500);
     }
 
     activateCooldown() {
         this.cooldownActive = true;
-        const btns = document.querySelectorAll('.action-btn');
-        btns.forEach(b => b.disabled = true);
+        this.updateButtonStates();
         setTimeout(() => {
             this.cooldownActive = false;
-            this.updateButtonVisibility();
+            this.updateButtonStates();
         }, CONFIG.COOLDOWN_MS);
     }
 
-    updateButtonVisibility() {
-        const btns = document.querySelectorAll('.action-btn');
+    updateButtonStates() {
+        const feedBtn = document.getElementById('feed-btn');
+        const playBtn = document.getElementById('play-btn');
+        const restBtn = document.getElementById('rest-btn');
+        if (!feedBtn) return;
+
         const hunger0 = this.gameState.stats.hunger === 0;
         const energy0 = this.gameState.stats.energy === 0;
 
-        document.getElementById('feed-btn').disabled = this.cooldownActive || (energy0 && !hunger0);
-        document.getElementById('play-btn').disabled = this.cooldownActive || hunger0 || energy0;
-        document.getElementById('rest-btn').disabled = this.cooldownActive || (hunger0 && !energy0);
+        feedBtn.disabled = this.cooldownActive || (energy0 && !hunger0);
+        playBtn.disabled = this.cooldownActive || hunger0 || energy0;
+        restBtn.disabled = this.cooldownActive || (hunger0 && !energy0);
     }
 
     updateUI() {
         if (!this.gameState) return;
 
-        // Update Stats
+        // Stats UI
         for (let key in this.gameState.stats) {
             const val = Math.round(this.gameState.stats[key]);
             const fill = document.getElementById(`${key}-fill`);
             const label = document.getElementById(`${key}-val`);
-            
             if (fill) {
                 fill.style.width = `${val}%`;
                 fill.style.backgroundColor = val > 50 ? 'var(--success)' : (val > 20 ? 'var(--warning)' : 'var(--danger)');
@@ -281,28 +297,45 @@ class TamagotchiApp {
             if (label) label.innerText = val;
         }
 
-        // Update Sprite & Status
+        // Sprite & Status UI
         const sprite = document.getElementById('pet-sprite');
-        const status = document.getElementById('status-label');
-        if (status) status.innerText = this.gameState.status;
+        const statusLabel = document.getElementById('status-label');
+        if (statusLabel) statusLabel.innerText = this.gameState.status;
 
         if (sprite) {
             let icon = '🐣';
             if (this.gameState.status === 'Sick') icon = '🤢';
-            if (this.gameState.status === 'Evolved') icon = '🦄';
+            if (this.gameState.isEvolved) {
+                // Evolved form stays, but if stats are low, show sick icon as indicator
+                const isLow = this.gameState.stats.hunger <= CONFIG.SICK_THRESHOLD || 
+                              this.gameState.stats.happiness <= CONFIG.SICK_THRESHOLD || 
+                              this.gameState.stats.energy <= CONFIG.SICK_THRESHOLD;
+                icon = isLow ? '🤢 (🦄)' : '🦄';
+            }
             
-            // Easter Egg Names
-            if (this.gameState.name.toLowerCase() === 'antigravity') {
+            // Easter Eggs
+            const name = this.gameState.name.toLowerCase();
+            if (name === 'antigravity') {
                 sprite.classList.add('animate-float');
                 icon = '🛸';
-            } else if (this.gameState.name.toLowerCase() === 'deeplearning') {
+            } else if (name === 'deeplearning') {
                 icon = '🎓';
             }
-
             sprite.innerText = icon;
         }
 
-        this.updateButtonVisibility();
+        // Sick UI Hue Shift (Applies whenever stats are low, even if evolved)
+        const isLow = this.gameState.stats.hunger <= CONFIG.SICK_THRESHOLD || 
+                      this.gameState.stats.happiness <= CONFIG.SICK_THRESHOLD || 
+                      this.gameState.stats.energy <= CONFIG.SICK_THRESHOLD;
+        
+        if (isLow) {
+            document.body.style.filter = 'hue-rotate(30deg)';
+        } else {
+            document.body.style.filter = 'none';
+        }
+
+        this.updateButtonStates();
     }
 
     pokePet() {
@@ -322,7 +355,7 @@ class TamagotchiApp {
     resetIdleTimer() {
         clearTimeout(this.idleTimer);
         const sprite = document.getElementById('pet-sprite');
-        if (sprite) sprite.classList.remove('animate-float');
+        if (sprite && !this.gameState?.isEvolved) sprite.classList.remove('animate-float');
         
         this.idleTimer = setTimeout(() => {
             if (this.gameState && this.gameState.status !== 'Sick') {
@@ -334,4 +367,11 @@ class TamagotchiApp {
 }
 
 // Start App
-window.onload = () => new TamagotchiApp();
+if (typeof window !== 'undefined') {
+    window.onload = () => new TamagotchiApp();
+}
+
+// Export for testing
+if (typeof module !== 'undefined') {
+    module.exports = { TamagotchiLogic, CONFIG };
+}
